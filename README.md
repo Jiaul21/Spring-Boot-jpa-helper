@@ -7,11 +7,13 @@
 
 A foundational, zero-overhead Spring Boot library providing reusable JPA components, pagination helpers, auditable entities, and repositories.
 
-Designed as a **professional thin library JAR**:
+---
+
+## ✨ Features
+
 - **Zero Classpath Pollution**: Framework dependencies (`spring-data-jpa`, `jakarta.persistence-api`, `hibernate-core`) are marked `provided` and `optional`. Your consumer application retains 100% control over Spring Data and Hibernate versions.
 - **IDE Friendly**: Bundles compiled source JAR (`-sources.jar`) and Javadoc JAR (`-javadoc.jar`) for instant code completion and documentation.
 - **Java Baseline**: Built for Java 17 minimum, fully compatible with Java 21, 25, and future LTS releases.
-- **Core Helper Integration**: Built on top of `core-helper` for unified API responses, exceptions, and utility functions.
 
 ---
 
@@ -34,7 +36,7 @@ Designed as a **professional thin library JAR**:
     <dependency>
         <groupId>com.github.Jiaul21</groupId>
         <artifactId>Spring-Boot-jpa-helper</artifactId>
-        <version>${version}</version> <!-- e.g., v0.0.1 or main-SNAPSHOT -->
+        <version>${version}</version>
     </dependency>
 </dependencies>
 ```
@@ -74,7 +76,7 @@ If you build locally via `mvn clean install`:
 <dependency>
     <groupId>com.jiaul</groupId>
     <artifactId>jpa-helper</artifactId>
-    <version>${version}</version> <!-- e.g., 0.0.1-SNAPSHOT -->
+    <version>0.0.1-SNAPSHOT</version>
 </dependency>
 ```
 
