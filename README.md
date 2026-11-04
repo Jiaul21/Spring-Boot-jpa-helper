@@ -14,6 +14,28 @@ Designed as a **professional thin library JAR**:
 
 ---
 
+## 📋 Compatibility Matrix & System Requirements
+
+| Component | Minimum Version | Supported Range | Notes |
+|---|---|---|---|
+| **Java (JDK)** | `17` | `17`, `21`, `25+` (LTS) | Compiled with Java 17 bytecode target (`--release 17`). |
+| **Spring Boot** | `3.0.0` | `3.0.0+` (3.x, 4.x+) | Full Jakarta EE 10 / Spring Boot 3.x+ ecosystem support. |
+| **Spring Data JPA** | `3.0.0` | `3.0.0+` | Provided transitively by Spring Boot. |
+| **Hibernate ORM** | `6.0.0` | `6.0.x` – `6.x+` | Standard provider in Spring Boot 3.x+; leverages HQL `id(e)` & `@FilterDef`. |
+| **Jakarta Persistence** | `3.0` | `3.0+` | Uses standard `jakarta.persistence.*` namespace. |
+
+> **Hibernate 6+ Availability Note:**
+> All Spring Boot 3.x and future releases natively embed **Hibernate 6.x+** by default:
+> 1. Spring Boot 3.0.x embeds Hibernate 6.1
+> 2. Spring Boot 3.1.x embeds Hibernate 6.2
+> 3. Spring Boot 3.2.x embeds Hibernate 6.4
+> 4. Spring Boot 3.3.x embeds Hibernate 6.5
+> 5. Spring Boot 3.4.x embeds Hibernate 6.6
+>
+> Because `jpa-helper` marks `hibernate-core` as `<scope>provided</scope>`, any Spring Boot 3.x+ consumer automatically provides a fully compatible Hibernate runtime without manual dependency overrides.
+
+---
+
 ## 📦 Installation
 
 ### Option 1: Via JitPack (Recommended for Remote Consumption)

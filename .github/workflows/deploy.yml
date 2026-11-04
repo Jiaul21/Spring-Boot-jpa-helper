@@ -1,0 +1,58 @@
+name: Publish to GitHub Packages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: # Allows manual trigger from GitHub Actions tab
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          server-id: github
+          cache: 'maven' # Caches dependencies for faster builds
+
+      - name: Run Tests
+        run: mvn clean test
+
+      - name: Build and Deploy to GitHub Packages
+        run: mvn deploy -DskipTests
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+#               ----- release way -----
+#   update version in pom.xml as <version>1.0.1</version>
+
+
+          #Test release
+#  git add .
+#  git commit -m "test release v1.0.1-beta : not contain, not in, not between operation"
+#  git tag v1.0.1-beta
+#  git push origin v1.0.1-beta
+#  git push origin main
+
+
+          #Final release
+#  git add .
+#  git commit -m "release 1.0.1 : "
+#  git tag v1.0.1
+#  git push origin v1.0.1
+#  git push origin main
+
+
+# git tag -d v1.0.0-beta
