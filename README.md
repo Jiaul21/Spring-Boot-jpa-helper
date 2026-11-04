@@ -368,20 +368,87 @@ public class StudentController {
         int updatedCount = studentHelper.updateFieldByID(id, "status", status);
         return ResponseEntity.ok(updatedCount);
     }
+
+    // 6. Programmatic transactional boundary combining updateEntity with another update
+    @PostMapping("/{id}/verify-and-activate")
+    public ResponseEntity<Void> verifyAndActivate(
+            @PathVariable Long id,
+            @RequestParam String email,
+            @RequestParam String status) {
+
+        studentHelper.transactionalProxy(() -> {
+            // Step 1: In-place managed entity mutation (UpdateHelper.updateEntity)
+            studentHelper.updateEntity(id, student -> {
+                student.setEmail(email);
+            });
+
+            // Step 2: Direct atomic field update (UpdateHelper.updateFieldByID)
+            studentHelper.updateFieldByID(id, "status", status);
+
+            // Both updates execute atomically in ONE transaction:
+            // Automatically COMMITS on completion, or ROLLS BACK if any exception occurs.
+        });
+
+        return ResponseEntity.ok().build();
+    }
 }
 ```
+
+##### 5. Programmatic Transaction Boundaries (`transactionalProxy`):
+In Spring, calling a `@Transactional` method from *within the same class* (self-invocation) bypasses the Spring AOP proxy, failing to start a transaction. Furthermore, running multi-step logic inside non-transactional methods (controllers, scheduled jobs, event listeners) typically requires injecting and configuring `TransactionTemplate` or `PlatformTransactionManager`.
+
+`BaseHelper` solves this via [transactionalProxy(Runnable action)](file:///d:/enterprise-system/spring-helper/jpa-helper/src/main/java/com/jiaul/jpahelper/service/base/BaseHelperImpl.java#L119-L123):
+1. **Invoked Through Spring AOP Proxy**: Because `studentHelper` is an injected bean, calling `transactionalProxy` routes through Spring's transaction interceptor.
+2. **Automatic Commit**: All database operations executed inside `action.run()` participate in the transaction. When the lambda completes, Spring commits the transaction to the database.
+3. **Automatic Rollback**: If any `RuntimeException` or `Error` is thrown inside the lambda, Spring immediately triggers a database rollback.
+
+```java
+// Execute arbitrary operations inside a guaranteed transaction
+studentHelper.transactionalProxy(() -> {
+    Student student = studentHelper.findByIdOrThrow(studentId);
+    student.setName("Verified Student");
+    studentHelper.save(student);
+    studentHelper.updateFieldByID(studentId, "status", "VERIFIED");
+    // End of block -> transaction automatically commits
+});
+```
+
+#### Available BaseHelper Methods:
+| Method | Description |
+|---|---|
+| `findByIdOrThrow(id)` | Finds entity by ID or throws `EntityNotFoundException` if not present. |
+| `existsByIdOrThrow(id)` | Verifies entity existence or throws `EntityNotFoundException`. |
+| `findById(id, projectionClass)` | Projection lookup mapping entity data to custom interface/class DTO. |
+| `findExistingIds(ids)` | Filters an ID collection, returning only the IDs that exist in the database. |
+| `findExistingIds(ids, collectionFactory)` | Maps existing IDs directly into a custom collection (e.g. `HashSet::new`). |
+| `save(entity)` | Persists or updates the entity via repository. |
+| `delete(entity)` / `deleteById(id)` | Deletes the entity instance or row by ID. |
+| `transactionalProxy(Runnable action)` | Executes arbitrary code inside an active Spring transaction with automatic commit/rollback. |
 
 ---
 
 ### 4. Dynamic Fetch Joins & Query Selector (`SelectHelper`)
 
-[SelectHelper](file:///d:/enterprise-system/spring-helper/jpa-helper/src/main/java/com/jiaul/jpahelper/service/selector/SelectHelper.java) eliminates `LazyInitializationException` and N+1 query problems by allowing callers to specify any arbitrary list of dotted relation paths to eagerly initialize via `LEFT JOIN FETCH`.
+[SelectHelper](file:///d:/enterprise-system/spring-helper/jpa-helper/src/main/java/com/jiaul/jpahelper/service/selector/SelectHelper.java) is specifically designed to eliminate the notorious **N+1 query problem** and prevent **`LazyInitializationException`** by eagerly fetching target entities and all required related entities in **a single optimized SQL query at once**.
+
+#### ⚡ Solving the N+1 Query Problem at Once:
+In standard Spring Data JPA, navigating lazy associations across entity graphs often causes severe performance degradation:
+- **Without `SelectHelper` (The N+1 Problem)**:
+  - 1 query to fetch 50 students (`SELECT s FROM Student s`).
+  - 50 additional queries to fetch their `department` (`SELECT d FROM Department d WHERE id = ?`).
+  - 50 additional queries to fetch their `profile` and `advisor` (`SELECT p FROM StudentProfile p WHERE id = ?`).
+  - **Result**: **101+ database roundtrips** and high latency, plus the risk of `LazyInitializationException` as soon as the persistence context closes (e.g., in controllers or serialization layers).
+- **With `SelectHelper` (1 Single Query)**:
+  - You specify the required graph: `studentHelper.fetchByIDIn(ids, List.of("department", "profile.advisor"))`.
+  - Generates a single dynamic query: `SELECT DISTINCT e FROM Student e LEFT JOIN FETCH e.department LEFT JOIN FETCH e.profile j0 LEFT JOIN FETCH j0.advisor WHERE id(e) IN :ids`.
+  - **Result**: **1 single database roundtrip** that completely initializes all required related entities at once with zero lazy-loading penalties.
 
 #### Key Innovations:
-1. **Zero-Allocation Single Condition**: `fetchBy("email", value, joins)` builds queries directly without creating intermediate `Map` objects.
-2. **Automatic Condition Joins**: If filtering by a nested relation property (e.g. `department.code`), `SelectHelper` automatically adds `LEFT JOIN FETCH e.department` even if omitted from `joinFields`.
-3. **Cartesian Product Protection**: If multiple collection relations are requested (e.g. `courses` and `clubs`), it groups requested paths and joins only the first collection group to avoid Hibernate's `MultipleBagFetchException` and exponential row multiplication.
-4. **Metamodel Caching**: Validates paths dynamically against the JPA Metamodel and caches validated relations in concurrent sets for near-zero runtime overhead.
+1. **N+1 Problem Resolution at Once**: Eagerly fetches arbitrary multi-level relation graphs (e.g., `profile.advisor`, `courses.teacher`) in a single SQL query without altering repository queries or writing manual `@EntityGraph` annotations.
+2. **Zero-Allocation Single Condition**: `fetchBy("email", value, joins)` builds queries directly without creating intermediate `Map` objects.
+3. **Automatic Condition Joins**: If filtering by a nested relation property (e.g. `department.code`), `SelectHelper` automatically adds `LEFT JOIN FETCH e.department` even if omitted from `joinFields`.
+4. **Cartesian Product Protection**: If multiple collection relations are requested (e.g. `courses` and `clubs`), it groups requested paths and joins only the first collection group to avoid Hibernate's `MultipleBagFetchException` and exponential row multiplication.
+5. **Metamodel Caching**: Validates paths dynamically against the JPA Metamodel and caches validated relations in concurrent sets for near-zero runtime overhead.
 
 #### Usage Examples:
 ```java
