@@ -1,7 +1,7 @@
 package com.jiaul.jpahelper.service.selector;
 
 import com.jiaul.jpahelper.repository.BaseRepository;
-import com.jiaul.jpahelper.service.updater.UpdateBaseHelperImpl;
+import com.jiaul.jpahelper.service.updater.UpdateHelperImpl;
 import jakarta.persistence.TypedQuery;
 import jakarta.persistence.metamodel.Attribute;
 import jakarta.persistence.metamodel.ManagedType;
@@ -12,15 +12,56 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> implements SelectBaseHelper<E, ID> {
+/**
+ * Standard implementation of {@link SelectHelper} providing dynamic multi-level relation fetch queries,
+ * condition joins, and Cartesian product prevention.
+ * <p>
+ * Key implementation mechanisms:
+ * <ul>
+ *   <li><b>Concurrent Metamodel Caching:</b> Validated single-valued relations and collection relations are cached
+ *       in thread-safe {@link ConcurrentHashMap#newKeySet()} sets ({@link #singleRelations} and {@link #collectionRelations})
+ *       so that JPA Metamodel path navigation occurs only once per distinct relation path.</li>
+ *   <li><b>Cartesian Product Guard:</b> If a caller requests multiple collection relations (which would trigger Hibernate's
+ *       {@code MultipleBagFetchException} or result in exponential Cartesian product row multiplication), this implementation
+ *       groups requested paths and includes only the first collection group in the fetch query.</li>
+ *   <li><b>Zero-Allocation Single Condition Building:</b> {@link #buildFetchQuery(String, Object, List)} builds JPQL
+ *       directly without creating intermediate {@link Map} objects.</li>
+ *   <li><b>Dynamic Condition Joins:</b> When filtering on a nested relation property that was not explicitly listed in
+ *       {@code joinFields}, {@link #buildConditionClause} dynamically generates the necessary {@code LEFT JOIN FETCH} clause.</li>
+ * </ul>
+ *
+ * @param <E>  the managed domain entity type
+ * @param <ID> the primary key identifier type of the entity
+ */
+public class SelectHelperImpl<E, ID> extends UpdateHelperImpl<E, ID> implements SelectHelper<E, ID> {
 
+    /**
+     * Cache of validated single-valued (to-one) relation paths (e.g., {@code "department"}, {@code "profile.advisor"}).
+     */
     protected final Set<String> singleRelations = ConcurrentHashMap.newKeySet();
+
+    /**
+     * Cache of validated collection-valued (to-many) relation paths (e.g., {@code "courses"}, {@code "clubs"}).
+     */
     protected final Set<String> collectionRelations = ConcurrentHashMap.newKeySet();
 
-    public SelectBaseHelperImpl(Class<E> entityClass, BaseRepository<E, ID> baseRepository) {
+    /**
+     * Constructs a new {@code SelectHelperImpl} backed by the given entity class and repository.
+     *
+     * @param entityClass    the runtime class of the managed entity; must not be {@code null}
+     * @param baseRepository the Spring Data repository backing the entity; must not be {@code null}
+     * @throws NullPointerException if {@code entityClass} or {@code baseRepository} is {@code null}
+     */
+    public SelectHelperImpl(Class<E> entityClass, BaseRepository<E, ID> baseRepository) {
         super(entityClass, baseRepository);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * If {@code joinFields} is null or empty, bypasses query generation and directly calls
+     * {@link jakarta.persistence.EntityManager#find(Class, Object)} to benefit from Hibernate's L1 cache.
+     */
     @Override
     @Transactional(readOnly = true)
     public E fetchByID(ID id, List<String> joinFields) {
@@ -31,12 +72,18 @@ public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> imp
         return buildFetchQuery(idName, id, joinFields).getResultStream().findFirst().orElse(null);
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     @Transactional(readOnly = true)
     public List<E> fetchBy(String cName, Object cValue, List<String> joinFields) {
         return buildFetchQuery(cName, cValue, joinFields).getResultList();
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     @Transactional(readOnly = true)
     public List<E> fetchByIDIn(Collection<ID> ids, List<String> joinFields) {
@@ -46,12 +93,20 @@ public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> imp
         return buildFetchByIDInQuery(ids, joinFields).getResultList();
     }
 
+    /**
+     * {@inheritDoc}
+     */
     @Override
     @Transactional(readOnly = true)
     public List<E> fetchBy(Map<String, Object> conditions, List<String> joinFields) {
         return buildFetchQuery(conditions, joinFields).getResultList();
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Directly builds the JPQL query without intermediate {@link Map} allocations.
+     */
     @Override
     @Transactional(readOnly = true)
     public TypedQuery<E> buildFetchQuery(String cName, Object cValue, List<String> joinFields) {
@@ -74,6 +129,11 @@ public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> imp
         return query;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Binds each condition with an indexed parameter name ({@code :cond_0}, {@code :cond_1}).
+     */
     @Override
     @Transactional(readOnly = true)
     public TypedQuery<E> buildFetchQuery(Map<String, Object> conditions, List<String> joinFields) {
@@ -112,6 +172,12 @@ public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> imp
         return query;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Generates a query matching {@code WHERE id(e) IN :ids}.
+     */
+    @Override
     @Transactional(readOnly = true)
     public TypedQuery<E> buildFetchByIDInQuery(Collection<ID> ids, List<String> joinFields) {
         if (ids == null || ids.isEmpty()) {
@@ -127,7 +193,16 @@ public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> imp
         return query;
     }
 
+    // -------------------------------------------------------------
+    // Internal Query Construction & Metamodel Navigation
+    // -------------------------------------------------------------
 
+    /**
+     * Constructs the base {@code SELECT DISTINCT e FROM Entity e} query and appends validated
+     * {@code LEFT JOIN FETCH} clauses for the requested relation fields.
+     * <p>
+     * If multiple collections are requested, only the first collection group is joined to avoid Cartesian products.
+     */
     private StringBuilder initBaseFetchQuery(List<String> joinFields, Map<String, String> mainAliases) {
         StringBuilder mainQuery = new StringBuilder("SELECT DISTINCT e FROM ").append(entityName).append(" e");
         Map<String, List<String>> collectionGroups = new LinkedHashMap<>();
@@ -175,6 +250,9 @@ public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> imp
         return mainQuery;
     }
 
+    /**
+     * Builds a single condition SQL/JPQL expression and dynamically appends any missing relation joins to the query.
+     */
     private String buildConditionClause(StringBuilder query, String cName, Object cValue, String paramName, Map<String, String> aliases) {
         if (cName.equals(idName) || cName.equals("id(e)")) {
             return "id(e)" + (cValue == null ? " IS NULL" : " = :" + paramName);
@@ -205,9 +283,14 @@ public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> imp
 
     /**
      * Dynamically validates each segment of a dotted path against the JPA Metamodel
-     * and caches every valid relation prefix into singleRelations or collectionRelations.
-     * - Basic fields are skipped (returning the relation prefix before the basic field, or null if root basic field).
-     * - If a second collection appears in the path, stops before the second collection and returns the prefix up to the first.
+     * and caches every valid relation prefix into {@link #singleRelations} or {@link #collectionRelations}.
+     * <ul>
+     *   <li>Basic fields are skipped (returning the relation prefix before the basic field, or {@code null} if root basic field).</li>
+     *   <li>If a second collection appears in the path, stops before the second collection to prevent Cartesian products.</li>
+     * </ul>
+     *
+     * @param field the dotted relation or field path to validate
+     * @return the longest valid relation prefix, or {@code null} if a root basic attribute
      */
     private String resolveAndCacheRelation(String field) {
         ManagedType<?> currentType = this.entity;
@@ -283,6 +366,10 @@ public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> imp
         return lastValidRelationPath;
     }
 
+    /**
+     * Determines the collection group key for a relation path to ensure only paths belonging
+     * to the same collection root are joined together.
+     */
     private String findCollectionGroupKey(String field) {
         int start = 0;
         while (true) {
@@ -298,6 +385,10 @@ public class SelectBaseHelperImpl<E, ID> extends UpdateBaseHelperImpl<E, ID> imp
         }
     }
 
+    /**
+     * Appends a {@code LEFT JOIN FETCH} clause for each segment of the given path, assigning unique aliases
+     * ({@code j0}, {@code j1}, etc.) stored in {@code aliases}.
+     */
     private void appendJoinPath(StringBuilder query, String field, Map<String, String> aliases) {
         String parentAlias = "e";
         int start = 0;

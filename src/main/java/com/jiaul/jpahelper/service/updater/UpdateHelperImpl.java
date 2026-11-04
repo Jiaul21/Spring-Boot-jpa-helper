@@ -11,12 +11,40 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
 import java.util.function.Consumer;
 
-public class UpdateBaseHelperImpl<E, ID> extends BaseHelperImpl<E, ID> implements UpdateBaseHelper<E, ID> {
+/**
+ * Standard implementation of {@link UpdateHelper} executing transactional direct JPQL updates
+ * and high-performance CASE-WHEN bulk batch updates.
+ * <p>
+ * Key implementation characteristics:
+ * <ul>
+ *   <li>All update operations are annotated with {@link Transactional} to ensure atomic execution.</li>
+ *   <li>Direct bulk update queries invoke {@link jakarta.persistence.EntityManager#clear()} when rows are modified
+ *       to prevent stale entity state in the first-level persistence context.</li>
+ *   <li>Bulk CASE-WHEN batch updates bundle arbitrarily large sets of row updates into a single database round-trip.</li>
+ * </ul>
+ *
+ * @param <E>  the managed domain entity type
+ * @param <ID> the primary key identifier type of the entity
+ */
+public class UpdateHelperImpl<E, ID> extends BaseHelperImpl<E, ID> implements UpdateHelper<E, ID> {
 
-    public UpdateBaseHelperImpl(Class<E> entityClass, BaseRepository<E, ID> baseRepository) {
+    /**
+     * Constructs a new {@code UpdateHelperImpl} backed by the given entity class and repository.
+     *
+     * @param entityClass    the runtime class of the managed entity; must not be {@code null}
+     * @param baseRepository the Spring Data repository backing the entity; must not be {@code null}
+     * @throws NullPointerException if {@code entityClass} or {@code baseRepository} is {@code null}
+     */
+    public UpdateHelperImpl(Class<E> entityClass, BaseRepository<E, ID> baseRepository) {
         super(entityClass, baseRepository);
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Fetches the entity via {@link jakarta.persistence.EntityManager#find}, executes {@code updater.accept(entity)},
+     * and relies on JPA dirty checking upon transaction commit.
+     */
     @Override
     @Transactional
     public E updateEntity(ID id, Consumer<E> updater) {
@@ -31,6 +59,11 @@ public class UpdateBaseHelperImpl<E, ID> extends BaseHelperImpl<E, ID> implement
         return entity;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Generates: {@code UPDATE {entityName} e SET e.{fieldName} = :value WHERE id(e) = :ID}.
+     */
     @Override
     @Transactional
     public int updateFieldByID(ID id, String fieldName, Object value) {
@@ -50,6 +83,11 @@ public class UpdateBaseHelperImpl<E, ID> extends BaseHelperImpl<E, ID> implement
         return updated;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Generates: {@code UPDATE {entityName} e SET e.f1 = :v_0, e.f2 = :v_1 WHERE id(e) IN :IDs}.
+     */
     @Override
     @Transactional
     public int updateFieldsByIDIn(Collection<ID> ids, Map<String, Object> fields) {
@@ -83,6 +121,11 @@ public class UpdateBaseHelperImpl<E, ID> extends BaseHelperImpl<E, ID> implement
         return updated;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Generates: {@code UPDATE {entityName} e SET e.{fieldName} = :value WHERE e.{cName} = :c} (or {@code IS NULL}).
+     */
     @Override
     @Transactional
     public int updateField(String fieldName, Object fieldValue, String cName, Object cValue) {
@@ -106,6 +149,11 @@ public class UpdateBaseHelperImpl<E, ID> extends BaseHelperImpl<E, ID> implement
         return updated;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Generates: {@code UPDATE {entityName} e SET e.f1 = :set_0 WHERE e.c1 = :cond_0 AND e.c2 IS NULL}.
+     */
     @Override
     @Transactional
     public int updateFieldsByConditions(Map<String, Object> fields, Map<String, Object> conditions) {
@@ -159,6 +207,17 @@ public class UpdateBaseHelperImpl<E, ID> extends BaseHelperImpl<E, ID> implement
         return updated;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Generates a single JPQL query with a {@code CASE id(e)} clause for each target field:
+     * <pre>{@code
+     * UPDATE {entityName} e SET
+     *   e.f1 = CASE id(e) WHEN :id_0 THEN :v_0_0 WHEN :id_1 THEN :v_0_1 END,
+     *   e.f2 = CASE id(e) WHEN :id_0 THEN :v_1_0 WHEN :id_1 THEN :v_1_1 END
+     * WHERE id(e) IN :IDs
+     * }</pre>
+     */
     @Override
     @Transactional
     public int updateBulkEvenFields(List<String> fields, List<? extends IdValues> values) {
@@ -224,6 +283,17 @@ public class UpdateBaseHelperImpl<E, ID> extends BaseHelperImpl<E, ID> implement
         return updated;
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Generates a single JPQL query with a {@code CASE id(e)} clause that preserves unmentioned fields via {@code ELSE e.{field}}:
+     * <pre>{@code
+     * UPDATE {entityName} e SET
+     *   e.f1 = CASE id(e) WHEN :id_0 THEN :v_0_0 ELSE e.f1 END,
+     *   e.f2 = CASE id(e) WHEN :id_1 THEN :v_1_0 ELSE e.f2 END
+     * WHERE id(e) IN :IDs
+     * }</pre>
+     */
     @Override
     @Transactional
     public int updateBulkUnevenFields(List<? extends IdFieldValue> dataList) {
