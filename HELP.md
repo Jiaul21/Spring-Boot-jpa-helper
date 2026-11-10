@@ -82,6 +82,11 @@ The helper service suite follows a modular inheritance chain:
 2. **Conditional Filter Activation**: [JpaHelperAutoConfiguration](file:///d:/enterprise-system/spring-helper/jpa-helper/src/main/java/com/jiaul/jpahelper/config/JpaHelperAutoConfiguration.java) activates `HibernateFilterManager` conditionally (`jpa-helper.hibernate-filter.enabled`, defaulting to `true`).
 3. **Graceful Auditor Fallback**: [BasicAuditorAware](file:///d:/enterprise-system/spring-helper/jpa-helper/src/main/java/com/jiaul/jpahelper/config/BasicAuditorAware.java) is annotated with `@ConditionalOnMissingBean(AuditorAware.class)`, providing a default `"SYSTEM"` auditor that automatically backs off when a custom auditor bean is supplied.
 
+### 13. Compile-Time Metamodel Synergy (`metamodel-generator`)
+1. **CharSequence Interoperability**: `metamodel-generator` emits `ModelField<T, R>` instances implementing `java.lang.CharSequence`. Because `SelectHelper` and `UpdateHelper` accept property strings or `CharSequence`, metamodel constants (e.g. `StudentFields.department.name`) can be passed directly without `.toString()`.
+2. **Zero-Reflection DTO Streaming**: The generated `toValues()` and `toNonNullMap()` methods feed directly into `IdValues` and `IdFieldValue` bulk update contracts, allowing developers to execute high-throughput batch SQL queries without reflection or manual map construction.
+3. **Decoupled Architecture**: `jpa-helper` remains 100% decoupled from `metamodel-generator` at runtime; consumer applications choose whether to use raw strings or compile-time metamodels.
+
 ---
 
 ## 🚀 Common Commands

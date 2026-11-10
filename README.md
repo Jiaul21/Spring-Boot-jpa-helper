@@ -36,6 +36,27 @@ Designed as a **professional thin library JAR**:
 
 ---
 
+## 📑 Table of Contents
+
+- [Compatibility Matrix & System Requirements](#-compatibility-matrix--system-requirements)
+- [Installation](#-installation)
+  - [Option 1: Via JitPack (Recommended for Remote Consumption)](#option-1-via-jitpack-recommended-for-remote-consumption)
+  - [Option 2: Local Development Cache (`~/.m2`)](#option-2-local-development-cache-m2)
+  - [Option 3: GitHub Packages](#option-3-github-packages)
+- [Features & Usage](#-features--usage)
+  - [1. Auditable & Soft-Delete Base Entity (`BaseEntity`)](#1-auditable--soft-delete-base-entity-baseentity)
+  - [2. Dynamic Hibernate Soft-Delete Filters (`HibernateFilterManager`)](#2-dynamic-hibernate-soft-delete-filters-hibernatefiltermanager)
+  - [3. Unified Entity Helper Architecture (`EntityHelper` & `EntityHelperImpl`)](#3-unified-entity-helper-architecture-entityhelper--entityhelperimpl)
+  - [4. Dynamic Fetch Joins & Query Selector (`SelectHelper`)](#4-dynamic-fetch-joins--query-selector-selecthelper)
+  - [5. High-Performance Direct & Bulk Updates (`UpdateHelper`)](#5-high-performance-direct--bulk-updates-updatehelper)
+  - [6. Type Conversion Utility (`Converter`)](#6-type-conversion-utility-converter)
+  - [7. Spring Boot Auto-Configuration & Auditing Setup](#7-spring-boot-auto-configuration--auditing-setup)
+  - [8. 100% Type-Safe Operations with `metamodel-generator`](#8-100-type-safe-operations-with-metamodel-generator)
+- [Building From Source](#-building-from-source)
+- [License](#-license)
+
+---
+
 ## 📦 Installation
 
 ### Option 1: Via JitPack (Recommended for Remote Consumption)
@@ -641,6 +662,203 @@ Object typedValue = Converter.convertValue("credits", "4", studentMeta); // retu
 
 ---
 
+### 8. 100% Type-Safe Operations with `metamodel-generator`
+
+While `jpa-helper` provides powerful dynamic query and update engines, passing raw property paths as strings (e.g., `"department.name"`, `"profile.advisor"`, `"status"`) creates risks: **a single typographical error compiles without warning but crashes at runtime in production**.
+
+To achieve **complete compile-time type safety**, `jpa-helper` is designed to pair seamlessly with [`Spring-Boot-metamodel-generator`](https://github.com/Jiaul21/Spring-Boot-metamodel-generator).
+
+---
+
+#### 📦 Adding `metamodel-generator` to Your Build
+
+In your application's `pom.xml`, include `metamodel-generator` in dependencies and compiler annotation processor paths:
+
+```xml
+<dependencies>
+    <!-- 1. jpa-helper runtime -->
+    <dependency>
+        <groupId>com.github.Jiaul21</groupId>
+        <artifactId>Spring-Boot-jpa-helper</artifactId>
+        <version>${jpa-helper.version}</version>
+    </dependency>
+
+    <!-- 2. metamodel-generator compile-time/runtime metadata -->
+    <dependency>
+        <groupId>com.github.Jiaul21</groupId>
+        <artifactId>Spring-Boot-metamodel-generator</artifactId>
+        <version>${metamodel-generator.version}</version>
+    </dependency>
+</dependencies>
+
+<build>
+    <plugins>
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <version>3.14.0</version>
+            <configuration>
+                <release>17</release>
+                <annotationProcessorPaths>
+                    <!-- IMPORTANT: Lombok MUST be declared before metamodel-generator -->
+                    <path>
+                        <groupId>org.projectlombok</groupId>
+                        <artifactId>lombok</artifactId>
+                        <version>${lombok.version}</version>
+                    </path>
+                    <path>
+                        <groupId>com.github.Jiaul21</groupId>
+                        <artifactId>Spring-Boot-metamodel-generator</artifactId>
+                        <version>${metamodel-generator.version}</version>
+                    </path>
+                </annotationProcessorPaths>
+            </configuration>
+        </plugin>
+    </plugins>
+</build>
+```
+
+---
+
+#### 🏷️ Annotating Your Domain Entities
+
+Annotate your entities with `@ModelFields`:
+
+```java
+import com.jiaul.jpahelper.entity.BaseEntity;
+import com.jiaul.metamodelgenerator.annotation.ModelFields;
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.Setter;
+
+@Entity
+@Getter
+@Setter
+@ModelFields(fields = true, maps = true, lists = true)
+public class Student extends BaseEntity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String name;
+    private String email;
+    private String status;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    private Department department;
+
+    @OneToOne(fetch = FetchType.LAZY)
+    private StudentProfile profile;
+
+    @OneToMany(mappedBy = "student")
+    private List<Course> courses;
+}
+```
+
+During compilation, `metamodel-generator` automatically creates `StudentFields.java` containing type-safe constants (`StudentFields.email`, `StudentFields.department.name`, etc.) implementing `java.lang.CharSequence`.
+
+---
+
+#### 💡 Side-by-Side Comparison: Fragile Strings vs. Type-Safe Metamodel
+
+| Operation | ❌ Fragile String Approach (Runtime Error Risk) | ✅ Type-Safe Metamodel Approach (Compile-Time Safe) |
+|---|---|---|
+| **Eager Dynamic Fetch Join** | `studentHelper.fetchByID(id, List.of("depatment", "profle.advisor"));` *(Typos fail at runtime)* | `studentHelper.fetchByID(id, List.of(StudentFields.department, StudentFields.profile.advisor));` *(Typos caught by compiler)* |
+| **Nested Path Condition Query** | `studentHelper.fetchBy("department.cdoe", "CSE");` *(Silent failure)* | `studentHelper.fetchBy(StudentFields.department.code, "CSE");` *(IDE autocompletion & validation)* |
+| **Direct Field Update** | `studentHelper.updateFieldByID(id, "stauts", "ACTIVE");` | `studentHelper.updateFieldByID(id, StudentFields.status, "ACTIVE");` |
+| **Bulk Batch Values Extraction** | Manual list construction or reflection | `StudentFields.toValues(student)` *(Zero reflection, compile-time ordered)* |
+| **Bulk Batch Map Extraction** | Manual `Map.put` or Jackson `ObjectMapper` | `StudentFields.toNonNullMap(student)` *(Zero reflection, null-safe)* |
+
+---
+
+#### 🚀 Concrete Integration Recipes
+
+##### Recipe 1: Type-Safe Dynamic Multi-Level Fetch Joins (`SelectHelper`)
+Pass metamodel relation paths directly into `joinFields` to eagerly load multi-level association graphs in a single optimized query without string literals:
+
+```java
+// Eagerly fetch student, department, and profile -> advisor in 1 query:
+Student student = studentHelper.fetchByID(studentId, List.of(
+    StudentFields.department,
+    StudentFields.profile.advisor,
+    StudentFields.courses.teacher
+));
+```
+
+##### Recipe 2: Type-Safe Single & Multi-Condition Queries
+Filter by nested attributes with complete IDE autocomplete. The required joins (`department`) are automatically detected and joined:
+
+```java
+// Filter by nested relation attribute:
+List<Student> cseStudents = studentHelper.fetchBy(
+    StudentFields.department.code, 
+    "CSE", 
+    List.of(StudentFields.profile)
+);
+```
+
+##### Recipe 3: Type-Safe Direct Field Updates (`UpdateHelper`)
+Perform atomic single-column or multi-column updates with zero string literals:
+
+```java
+// 1. Single field atomic update
+studentHelper.updateFieldByID(studentId, StudentFields.status, "ACTIVE");
+
+// 2. Multi-field update by condition map
+studentHelper.updateFieldsByConditions(
+    Map.of(StudentFields.status.name(), "GRADUATED"),
+    Map.of(StudentFields.department.code.name(), "CSE")
+);
+```
+
+##### Recipe 4: Zero-Reflection High-Performance Bulk Updates (`IdValues` & `IdFieldValue`)
+`metamodel-generator`'s `toValues()` and `toNonNullMap()` methods directly power `jpa-helper`'s high-performance CASE-WHEN bulk batch engines:
+
+```java
+// 1. Uniform batch update implementing IdValues with StudentFields.toValues()
+public record StudentGradeUpdate(Long studentId, String grade, Integer credits) implements IdValues {
+    @Override
+    public Object getID() { return studentId; }
+
+    @Override
+    public List<Object> getValues() {
+        // Zero reflection, compile-time extracted list of values!
+        return StudentGradeUpdateFields.toValues(this);
+    }
+}
+
+// Execute single-query batch update across hundreds of students:
+studentHelper.updateBulkEvenFields(
+    List.of(StudentFields.grade, StudentFields.credits),
+    gradeUpdatesList
+);
+```
+
+```java
+// 2. Heterogeneous patch update implementing IdFieldValue with StudentFields.toNonNullMap()
+public record StudentPatch(Long studentId, String email, String phone) implements IdFieldValue {
+    @Override
+    public Object getID() { return studentId; }
+
+    @Override
+    public Map<String, Object> getFieldValue() {
+        // Zero reflection, automatically omits null fields!
+        return StudentPatchFields.toNonNullMap(this);
+    }
+}
+
+// Execute heterogeneous patch batch update in 1 atomic SQL query:
+studentHelper.updateBulkUnevenFields(patchList);
+```
+
+---
+
+> [!TIP]
+> For detailed configuration options and full feature reference of the metamodel compiler, see the [metamodel-generator Documentation](https://github.com/Jiaul21/Spring-Boot-metamodel-generator).
+
+---
+
 ## 🛠️ Building From Source
 
 1. **Clone the repository:**
@@ -656,3 +874,9 @@ Object typedValue = Converter.convertValue("credits", "4", studentMeta); // retu
    ```bash
    mvn clean install
    ```
+
+---
+
+## 📄 License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
